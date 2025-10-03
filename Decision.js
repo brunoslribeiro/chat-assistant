@@ -6,4 +6,6 @@ const DecisionSchema = new mongoose.Schema({
   decision: { type: Object, required: true },
   createdAt: { type: Date, default: Date.now, index: true }
 }, { versionKey: false, minimize: true });
+
+DecisionSchema.index({ threadId: 1, createdAt: -1 });
 export const Decision = mongoose.models.Decision || mongoose.model('Decision', DecisionSchema);
