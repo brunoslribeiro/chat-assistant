@@ -14,7 +14,7 @@ export async function getOrCreateOAThread({ threadId, OPENAI_API_KEY }) {
   });
   const openaiThreadId = thr?.data?.id;
   if (!openaiThreadId) throw new Error('Falha ao criar thread na OpenAI');
-  await ThreadMap.create({ threadId, openaiThreadId });  
+  await ThreadMap.create({ threadId, openaiThreadId });
   return openaiThreadId;
 }
 

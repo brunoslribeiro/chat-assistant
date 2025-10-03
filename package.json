@@ -1,6 +1,6 @@
 {
-  "name": "chat-assistant",
-  "version": "3.2.0",
+  "name": "chat-history-service-mongo",
+  "version": "3.3.0",
   "type": "module",
   "main": "server.js",
   "scripts": {

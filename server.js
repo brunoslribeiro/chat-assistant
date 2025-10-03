@@ -5,6 +5,7 @@ import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
 import { ThreadMap } from './ThreadMap.js';
+import { Decision } from './Decision.js';
 import { VALID_CANDIDATES, SALESFORCE_QUEUE_BY_CANDIDATE } from './catalog.js';
 import {
   getOrCreateOAThread,
@@ -153,14 +154,12 @@ app.post('/assist/reply', requireAuth, async (req, res) => {
     const { threadId, latestUserInput } = req.body || {};
     if (!threadId) return res.status(400).json({ error: 'threadId é obrigatório' });
 
-    // registra localmente
     if (latestUserInput && latestUserInput.trim()) {
       await insertMessage({ threadId: String(threadId), role: 'user', content: String(latestUserInput) });
     }
 
     const openaiThreadId = await getOrCreateOAThread({ threadId: String(threadId), OPENAI_API_KEY });
 
-    // aguardar/cancelar run ativo antes de adicionar nova mensagem
     if (latestUserInput && latestUserInput.trim()) {
       const wait = await waitUntilNoActiveRun({
         openaiThreadId, OPENAI_API_KEY, pollMs: ASSIST_POLL_MS, timeoutMs: ASSIST_POLL_TIMEOUT_MS
@@ -177,7 +176,6 @@ app.post('/assist/reply', requireAuth, async (req, res) => {
 
     const runId = await runAssistant({ openaiThreadId, assistantId: OPENAI_ASSISTANT_ID, OPENAI_API_KEY });
 
-    // NOVO: loop robusto que espera por requires_action ou completed
     const active = new Set(["queued","in_progress","requires_action"]);
     let state = await fetchRun({ openaiThreadId, runId, OPENAI_API_KEY });
     let lastDecision = null;
@@ -215,16 +213,34 @@ app.post('/assist/reply', requireAuth, async (req, res) => {
       state = await fetchRun({ openaiThreadId, runId, OPENAI_API_KEY });
     }
 
-    // Completed ou timeout/failed etc.
-    let reply = await fetchLatestAssistantText({ openaiThreadId, OPENAI_API_KEY });
-    if ((!reply || !reply.trim()) && lastDecision?.display_text) reply = lastDecision.display_text;
-    if (reply) await insertMessage({ threadId: String(threadId), role: 'assistant', content: reply });
+    // Clean reply: nunca string JSON
+    let replyText = await fetchLatestAssistantText({ openaiThreadId, OPENAI_API_KEY });
+    if (replyText && replyText.trim().startsWith('{') && replyText.trim().endsWith('}')) {
+      try { const obj = JSON.parse(replyText); replyText = obj?.display_text || ''; } catch {}
+    }
+    if ((!replyText || !replyText.trim()) && lastDecision?.display_text) replyText = lastDecision.display_text;
+    if (replyText) await insertMessage({ threadId: String(threadId), role: 'assistant', content: replyText });
 
-    res.json({ threadId, reply: reply || '', openaiThreadId, decision: lastDecision || null });
+    if (lastDecision) {
+      await Decision.create({ _id: uuidv4(), threadId: String(threadId), openaiThreadId, decision: lastDecision });
+    }
+
+    res.json({ threadId, openaiThreadId, reply: replyText || '', decision: lastDecision || null });
   } catch (e) {
     console.error('/assist/reply error', e?.response?.status, e?.response?.data || e);
     res.status(500).json({ error: 'assist_failed', detail: e?.response?.data || String(e) });
   }
+});
+
+app.get('/decisions/:threadId', requireAuth, async (req, res) => {
+  const { threadId } = req.params;
+  const docs = await Decision.find({ threadId }).sort({ createdAt: -1 }).limit(10).lean();
+  res.json({ threadId, decisions: docs });
+});
+
+app.get('/decisions', requireAuth, async (_req, res) => {
+  const docs = await Decision.find().sort({ createdAt: -1 }).limit(50).lean();
+  res.json({ decisions: docs });
 });
 
 app.listen(PORT, () => {
