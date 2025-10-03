@@ -62,6 +62,7 @@ const MessageSchema = new mongoose.Schema({
 }, { versionKey: false, minimize: true });
 
 MessageSchema.index({ threadId: 1, createdAt: 1 });
+MessageSchema.index({ threadId: 1, createdAt: -1 });
 const Message = mongoose.model('Message', MessageSchema);
 
 function calcExpiresAt() {
@@ -71,18 +72,27 @@ function calcExpiresAt() {
 }
 
 async function buildContext(threadId) {
-  const rows = await Message.find({ threadId }).sort({ createdAt: -1 }).limit(MAX_MESSAGES).lean();
-  const chrono = rows.slice().reverse();
+  const rows = await Message.find({ threadId })
+    .sort({ createdAt: -1 })
+    .limit(MAX_MESSAGES)
+    .select({ role: 1, content: 1, createdAt: 1 })
+    .lean();
+
+  if (!rows.length) return [];
+
   let total = 0;
-  const chosen = [];
-  for (let i = chrono.length - 1; i >= 0; i--) {
-    const msg = chrono[i];
+  const withinLimit = [];
+
+  for (const msg of rows) {
     const len = (msg.content || '').length;
     if (total + len > MAX_CHARS) break;
     total += len;
-    chosen.unshift(msg);
+    withinLimit.push(msg);
   }
-  return chosen.length ? chosen : chrono;
+
+  const base = withinLimit.length ? withinLimit : rows;
+  base.reverse();
+  return base;
 }
 
 async function insertMessage({ threadId, role, content, externalId }) {
@@ -119,8 +129,12 @@ app.post('/messages', requireAuth, async (req, res) => {
 
 app.get('/threads/:threadId', requireAuth, async (req, res) => {
   const { threadId } = req.params;
-  const messages = await Message.find({ threadId }).sort({ createdAt: 1 }).lean();
-  res.json({ threadId, messages });
+  const messages = await Message.find({ threadId })
+    .sort({ createdAt: -1 })
+    .select({ role: 1, content: 1, createdAt: 1, externalId: 1 })
+    .lean();
+  const ordered = messages.length ? [...messages].reverse() : [];
+  res.json({ threadId, messages: ordered });
 });
 
 app.post('/reply', requireAuth, async (req, res) => {
