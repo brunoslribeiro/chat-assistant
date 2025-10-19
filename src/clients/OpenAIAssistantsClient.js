@@ -54,13 +54,19 @@ export async function submitToolOutputs({ openaiThreadId, runId, outputs, OPENAI
 }
 
 export async function fetchLatestAssistantText({ openaiThreadId, OPENAI_API_KEY }) {
-  const msgs = await axios.get(`https://api.openai.com/v1/threads/${openaiThreadId}/messages`, {
+  const resp = await axios.get(`https://api.openai.com/v1/threads/${openaiThreadId}/messages`, {
     headers: baseHeaders(OPENAI_API_KEY),
-    params: { limit: 1, order: 'desc' }
+    params: { limit: 50, order: 'desc' }
   });
-  const assistantMsg = (msgs?.data?.data || []).find(m => m.role === 'assistant');
-  const content = assistantMsg?.content?.[0]?.text?.value || '';
-  return content;
+  const data = resp?.data?.data || [];
+  const assistantMsg = data.find(m => m.role === 'assistant');
+  if (!assistantMsg) return '';
+  const parts = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
+  for (const part of parts) {
+    const val = part?.text?.value || '';
+    if (typeof val === 'string' && val.trim()) return val;
+  }
+  return '';
 }
 
 export async function listRuns({ openaiThreadId, OPENAI_API_KEY, limit = 5 }) {

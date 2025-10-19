@@ -52,6 +52,7 @@
       </div>
     </header>
     <main>
+      <div id="banner" style="display:none; background:#3b1d1d; border:1px solid #7f1d1d; color:#fecaca; padding:10px; border-radius:8px; margin-bottom:12px;"></div>
       <div id="log"></div>
       <div class="row">
         <input id="input" placeholder="Digite sua mensagem e pressione Enter…" />
@@ -69,6 +70,10 @@
       const $baseUrl = $('baseUrl');
       const $token = $('token');
       const $status = $('status');
+      const $banner = $('banner');
+
+      // Default base URL to current origin for convenience
+      try { if (!$baseUrl.value) $baseUrl.value = window.location.origin; } catch {}
 
       function ensureThreadId() {
         let tid = $threadId.value.trim();
@@ -119,6 +124,15 @@
         $status.style.background = busy ? '#2a3346' : '';
       }
 
+      function showBanner(msg) {
+        $banner.style.display = 'block';
+        $banner.textContent = msg;
+      }
+      function hideBanner() {
+        $banner.style.display = 'none';
+        $banner.textContent = '';
+      }
+
       async function sendMessage() {
         const text = $input.value.trim();
         if (!text) return;
@@ -139,8 +153,11 @@
           const resp = await fetch(url, { headers });
           if (!resp.ok) {
             const t = await resp.text();
+            showBanner(`Falha HTTP ${resp.status}. Verifique AUTH_TOKEN/OPENAI_ASSISTANT_ID. Resposta: ${t}`);
             throw new Error(`HTTP ${resp.status}: ${t}`);
           }
+          hideBanner();
+          $status.textContent = 'connected';
           const reader = resp.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
@@ -179,9 +196,12 @@
                 }
                 meta.textContent = 'completed';
                 setBusy(false);
+                $status.textContent = 'idle';
               } else if (evt === 'error') {
                 meta.textContent = 'error';
                 setBusy(false);
+                $status.textContent = 'error';
+                showBanner(`Erro no stream: ${JSON.stringify(payload)}`);
               }
             }
           }
@@ -192,6 +212,7 @@
           wrap.textContent = 'Erro: ' + err;
           $log.appendChild(wrap);
           setBusy(false);
+          $status.textContent = 'error';
         }
       }
 

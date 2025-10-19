@@ -11,6 +11,7 @@ import {
 import { buildToolOutputsFromState, StreamEventInterpreter } from '../domain/AssistantsDomain.js';
 import { isRunActive } from '../domain/AssistantRunStatus.js';
 import { sleep } from '../utils/time.js';
+import { isDebug, dlog } from '../utils/debug.js';
 
 export class AssistConversationService {
   constructor({ messageService, decisionService, sseService, config }) {
@@ -52,8 +53,10 @@ export class AssistConversationService {
     const deadline = Date.now() + this.config.ASSIST_POLL_TIMEOUT_MS;
 
     while (Date.now() < deadline && isRunActive(state.status)) {
+      if (isDebug('DEBUG_RUN')) dlog('DEBUG_RUN', '[run]', runId, 'status=', state.status);
       if (state.status === 'requires_action' && state.required_action?.type === 'submit_tool_outputs') {
         const { outputs, decision } = buildToolOutputsFromState(state);
+        if (isDebug('DEBUG_RUN')) dlog('DEBUG_RUN', '[run]', runId, 'requires_action outputs=', outputs.length);
         if (outputs.length) {
           await submitToolOutputs({ openaiThreadId, runId, outputs, OPENAI_API_KEY: this.config.OPENAI_API_KEY });
         }
@@ -63,6 +66,7 @@ export class AssistConversationService {
       }
       state = await fetchRun({ openaiThreadId, runId, OPENAI_API_KEY: this.config.OPENAI_API_KEY });
     }
+    if (isDebug('DEBUG_RUN')) dlog('DEBUG_RUN', '[run]', runId, 'final status=', state.status);
     return { finalState: state, lastDecision };
   }
 
@@ -80,21 +84,26 @@ export class AssistConversationService {
   // Streaming helpers
   handleStreamEventFactory({ res, accum, openaiThreadId }) {
     return async (evt, data) => {
+      if (isDebug('DEBUG_SSE')) dlog('DEBUG_SSE', '[sse] event=', evt, 'payloadKeys=', Object.keys(data || {}));
       const commands = StreamEventInterpreter.interpret(evt, data);
       for (const cmd of commands) {
         if (cmd.type === 'delta') {
           accum.text += cmd.text;
           this.sse.send(res, 'delta', { text: cmd.text });
         } else if (cmd.type === 'submit_tool_outputs') {
+          if (isDebug('DEBUG_SSE')) dlog('DEBUG_SSE', '[sse] submit_tool_outputs count=', cmd.outputs?.length || 0);
           await submitToolOutputs({ openaiThreadId, runId: data?.id || data?.run_id, outputs: cmd.outputs, OPENAI_API_KEY: this.config.OPENAI_API_KEY });
         } else if (cmd.type === 'decision') {
+          if (isDebug('DEBUG_SSE')) dlog('DEBUG_SSE', '[sse] decision received');
           accum.decision = cmd.decision;
           this.sse.send(res, 'decision', cmd.decision);
         } else if (cmd.type === 'complete') {
+          if (isDebug('DEBUG_SSE')) dlog('DEBUG_SSE', '[sse] complete. textLen=', (accum.text || '').length);
           await this.persistArtifacts(accum.threadId, openaiThreadId, accum.text, accum.decision);
           this.sse.send(res, 'completed', { reply: accum.text || accum.decision?.display_text || '' });
           res.end();
         } else if (cmd.type === 'error') {
+          if (isDebug('DEBUG_SSE')) dlog('DEBUG_SSE', '[sse] error event');
           this.sse.send(res, 'error', { error: cmd.error });
         }
       }
@@ -105,13 +114,26 @@ export class AssistConversationService {
     this.sse.wire({
       stream,
       onEvent: this.handleStreamEventFactory({ res, accum, openaiThreadId }),
-      onCompleted: () => {
+      onCompleted: async () => {
         if (!res.writableEnded) {
-          this.sse.send(res, 'completed', { reply: accum.text || accum.decision?.display_text || '' });
-          res.end();
+          try {
+            // Fallback: if no deltas arrived, fetch latest assistant text
+            if (!accum.text?.trim()) {
+              if (isDebug('DEBUG_SSE')) dlog('DEBUG_SSE', '[sse] fallback fetching final text');
+              const finalText = await this.fetchFinalReply(openaiThreadId, accum.decision);
+              if (finalText) {
+                accum.text = finalText;
+              }
+            }
+            await this.persistArtifacts(accum.threadId, openaiThreadId, accum.text, accum.decision);
+          } finally {
+            this.sse.send(res, 'completed', { reply: accum.text || accum.decision?.display_text || '' });
+            res.end();
+          }
         }
       },
       onError: (err) => {
+        if (isDebug('DEBUG_SSE')) dlog('DEBUG_SSE', '[sse] stream error', String(err));
         if (!res.writableEnded) {
           this.sse.send(res, 'error', { error: String(err) });
           res.end();

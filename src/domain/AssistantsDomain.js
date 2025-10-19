@@ -35,8 +35,9 @@ export class StreamEventInterpreter {
     if (evt === 'thread.run.requires_action') {
       const { outputs, decision } = buildToolOutputsFromState(data);
       const cmds = [];
-      if (outputs.length) cmds.push({ type: 'submit_tool_outputs', outputs });
+      // Priorizar disponibilizar a decisão para a UI antes de I/O na OpenAI
       if (decision) cmds.push({ type: 'decision', decision });
+      if (outputs.length) cmds.push({ type: 'submit_tool_outputs', outputs });
       return cmds;
     }
     if (evt === 'thread.message.completed' || evt === 'message.completed') {
@@ -51,4 +52,3 @@ export class StreamEventInterpreter {
     return [{ type: 'noop' }];
   }
 }
-

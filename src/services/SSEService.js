@@ -1,8 +1,7 @@
-import { createParser as createSSEParserLib } from 'eventsource-parser';
-
 /**
  * SSEService: inicialização e parsing de Server-Sent Events.
- * Abstrai detalhes de protocolo e expõe uma interface simples para o restante da aplicação.
+ * Implementação manual com buffer para menor overhead, mantendo
+ * processamento sequencial para evitar condições de corrida.
  */
 export class SSEService {
   /** Inicializa os headers de SSE na resposta Express */
@@ -20,19 +19,29 @@ export class SSEService {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   }
 
-  /** Cria um parser baseado em eventsource-parser e retorna um handler de chunks */
+  /** Cria um parser SSE manual baseado em buffer e duplo newline */
   createParser(onEvent) {
-    const parser = createSSEParserLib(async (evt) => {
-      if (evt.type !== 'event') return;
-      const name = (evt.event && evt.event.trim()) || 'message';
-      const dataStr = evt.data ?? '';
-      if (dataStr === '') return;
-      let payload;
-      try { payload = JSON.parse(dataStr); } catch { payload = { raw: dataStr }; }
-      await onEvent(name, payload);
-    });
+    let buffer = '';
     return {
-      onChunk: (chunk) => parser.feed(typeof chunk === 'string' ? chunk : chunk.toString('utf8'))
+      onChunk: async (chunk) => {
+        buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const lines = rawEvent.split('\n');
+          let evt = 'message';
+          let dataStr = '';
+          for (const line of lines) {
+            if (line.startsWith('event:')) evt = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
+          }
+          if (!dataStr) continue;
+          let payload;
+          try { payload = JSON.parse(dataStr); } catch { payload = { raw: dataStr }; }
+          await onEvent(evt, payload);
+        }
+      }
     };
   }
 
@@ -42,9 +51,17 @@ export class SSEService {
    */
   wire({ stream, onEvent, onCompleted, onError }) {
     stream.setEncoding('utf8');
-    const parser = this.createParser(onEvent);
+    let processing = Promise.resolve();
+    const seqOnEvent = (evt, payload) => {
+      processing = processing.then(() => onEvent(evt, payload));
+      return processing;
+    };
+    const parser = this.createParser(seqOnEvent);
     stream.on('data', parser.onChunk);
-    stream.on('end', () => onCompleted && onCompleted());
+    stream.on('end', async () => {
+      try { await processing; } catch {}
+      onCompleted && onCompleted();
+    });
     stream.on('error', (err) => onError && onError(err));
   }
 }
