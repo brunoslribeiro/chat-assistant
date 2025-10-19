@@ -34,6 +34,8 @@
   </head>
   <body>
     <header>
+      <div style="display:flex;justify-content:space-between;align-items:end;gap:12px;flex-wrap:wrap; width:100%">
+        <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
       <div class="field">
         <label>Thread ID</label>
         <input id="threadId" placeholder="auto (gera se vazio)" />
@@ -49,6 +51,14 @@
       <div class="field">
         <label>Status</label>
         <span id="status" class="chip">idle</span>
+      </div>
+        </div>
+        <div class="field" style="align-items:flex-end">
+          <div style="display:flex; gap:8px;">
+            <button id="btnChangePwd">Trocar senha</button>
+            <button id="btnLogout">Sair</button>
+          </div>
+        </div>
       </div>
     </header>
     <main>
@@ -218,6 +228,20 @@
 
       $send.addEventListener('click', sendMessage);
       $input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+      // Logout + Change password
+      document.getElementById('btnLogout').onclick = async () => {
+        await fetch('/auth/logout', { method: 'POST' });
+        location.href = '/login.html';
+      };
+      document.getElementById('btnChangePwd').onclick = async () => {
+        const currentPassword = prompt('Senha atual:');
+        if (!currentPassword) return;
+        const newPassword = prompt('Nova senha:');
+        if (!newPassword) return;
+        const r = await fetch('/auth/change-password', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ currentPassword, newPassword }) });
+        if (r.ok) alert('Senha alterada com sucesso.'); else alert('Falha ao alterar senha.');
+      };
     </script>
   </body>
   </html>

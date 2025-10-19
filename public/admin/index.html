@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Auditoria - Threads</title>
+    <style>
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;margin:0}
+      header{padding:12px;border-bottom:1px solid #1e293b;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+      input,button{padding:8px 10px;border-radius:8px;border:1px solid #1e293b;background:#0b1220;color:#e2e8f0}
+      main{padding:12px}
+      table{width:100%;border-collapse:collapse}
+      th,td{border-bottom:1px solid #1e293b;padding:8px;text-align:left;font-size:14px}
+      a{color:#93c5fd}
+    </style>
+  </head>
+  <body>
+    <header>
+      <input id="search" placeholder="Buscar texto" />
+      <input id="from" type="datetime-local" />
+      <input id="to" type="datetime-local" />
+      <button id="go">Buscar</button>
+      <button onclick="location.href='/admin/dashboard.html'">Dashboard</button>
+      <button onclick="location.href='/admin/users.html'">Usuários</button>
+      <button onclick="location.href='/chat'">Voltar ao Chat</button>
+    </header>
+    <main>
+      <table>
+        <thead><tr><th>Thread</th><th>Primeira</th><th>Última</th><th>Msgs</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </main>
+    <script>
+      const $ = id => document.getElementById(id);
+      async function load(){
+        const q = new URLSearchParams();
+        if ($('search').value.trim()) q.set('search',$('search').value.trim());
+        if ($('from').value) q.set('from',new Date($('from').value).toISOString());
+        if ($('to').value) q.set('to',new Date($('to').value).toISOString());
+        const r = await fetch('/admin/threads?'+q.toString());
+        if (!r.ok) { alert('Falha ao carregar'); return; }
+        const data = await r.json();
+        const tbody = $('rows');
+        tbody.innerHTML='';
+        for (const t of data.threads){
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td><a href="/admin/thread.html?threadId=${encodeURIComponent(t.threadId)}">${t.threadId}</a></td>`+
+                         `<td>${new Date(t.firstAt).toLocaleString()}</td>`+
+                         `<td>${new Date(t.lastAt).toLocaleString()}</td>`+
+                         `<td>${t.messageCount}</td>`;
+          tbody.appendChild(tr);
+        }
+      }
+      document.getElementById('go').onclick = load;
+      load();
+    </script>
+  </body>
+  </html>

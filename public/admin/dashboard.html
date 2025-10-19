@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboard</title>
+    <style>
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;margin:0}
+      header{padding:12px;border-bottom:1px solid #1e293b;display:flex;gap:8px;align-items:center}
+      input,button{padding:8px 10px;border-radius:8px;border:1px solid #1e293b;background:#0b1220;color:#e2e8f0}
+      .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:12px}
+      .card{background:#0b1220;border:1px solid #1e293b;border-radius:8px;padding:12px;text-align:center}
+      .num{font-size:28px;font-weight:700}
+    </style>
+  </head>
+  <body>
+    <header>
+      <input id="from" type="datetime-local" />
+      <input id="to" type="datetime-local" />
+      <button id="go">Atualizar</button>
+      <button onclick="location.href='/admin/'" style="margin-left:auto">Threads</button>
+      <button onclick="location.href='/chat'">Chat</button>
+    </header>
+    <div class="cards">
+      <div class="card"><div>Conversas iniciadas</div><div id="started" class="num">-</div></div>
+      <div class="card"><div>Roteamentos</div><div id="routed" class="num">-</div></div>
+      <div class="card"><div>Não roteados</div><div id="notrouted" class="num">-</div></div>
+      <div class="card"><div>Decisões</div><div id="decisions" class="num">-</div></div>
+    </div>
+    <script>
+      const $ = id => document.getElementById(id);
+      async function load(){
+        const q = new URLSearchParams();
+        if ($('from').value) q.set('from', new Date($('from').value).toISOString());
+        if ($('to').value) q.set('to', new Date($('to').value).toISOString());
+        const r = await fetch('/admin/stats?'+q.toString());
+        if (!r.ok) { alert('Falha ao carregar'); return; }
+        const s = await r.json();
+        $('started').textContent = s.started;
+        $('routed').textContent = s.routed;
+        $('notrouted').textContent = s.not_routed;
+        $('decisions').textContent = s.decisions;
+      }
+      document.getElementById('go').onclick = load;
+      load();
+    </script>
+  </body>
+  </html>

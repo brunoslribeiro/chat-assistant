@@ -10,6 +10,7 @@ const MessageSchema = new mongoose.Schema({
 }, { versionKey: false, minimize: true });
 
 MessageSchema.index({ threadId: 1, createdAt: 1 });
+// Enable full-text search over message content for audit queries
+try { MessageSchema.index({ content: 'text' }); } catch {}
 
 export const Message = mongoose.models.Message || mongoose.model('Message', MessageSchema);
-

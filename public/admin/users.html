@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Usuários</title>
+    <style>
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;margin:0}
+      header{padding:12px;border-bottom:1px solid #1e293b;display:flex;gap:8px;align-items:center}
+      input,button,select{padding:8px 10px;border-radius:8px;border:1px solid #1e293b;background:#0b1220;color:#e2e8f0}
+      main{padding:12px}
+      table{width:100%;border-collapse:collapse}
+      th,td{border-bottom:1px solid #1e293b;padding:8px;text-align:left;font-size:14px}
+      .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    </style>
+  </head>
+  <body>
+    <header>
+      <button onclick="location.href='/admin/'">Threads</button>
+      <button onclick="location.href='/admin/dashboard.html'">Dashboard</button>
+      <button onclick="location.href='/'" style="margin-left:auto">Voltar ao Chat</button>
+    </header>
+    <main>
+      <div class="row">
+        <input id="email" placeholder="email" />
+        <input id="name" placeholder="nome" />
+        <select id="role">
+          <option value="curator">curator</option>
+          <option value="admin">admin</option>
+        </select>
+        <input id="password" type="password" placeholder="senha" />
+        <button id="create">Criar usuário</button>
+      </div>
+      <table>
+        <thead><tr><th>Email</th><th>Nome</th><th>Perfil</th><th>Criado</th><th>Ações</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </main>
+    <script>
+      const $ = id => document.getElementById(id);
+      async function load(){
+        const r = await fetch('/admin/users');
+        if (!r.ok) { alert('Falha ao carregar usuários'); return; }
+        const data = await r.json();
+        const tbody = $('rows'); tbody.innerHTML='';
+        for (const u of data.users){
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${u.email}</td><td>${u.name||''}</td><td>${u.role}</td><td>${new Date(u.createdAt).toLocaleString()}</td>`+
+                         `<td><button data-id="${u._id||u.id}" class="reset">Resetar senha</button></td>`;
+          tbody.appendChild(tr);
+        }
+        [...document.querySelectorAll('button.reset')].forEach(btn => {
+          btn.onclick = async () => {
+            const np = prompt('Nova senha para este usuário:');
+            if (!np) return;
+            const id = btn.getAttribute('data-id');
+            const rr = await fetch(`/admin/users/${id}/reset-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ newPassword: np }) });
+            if (!rr.ok) alert('Falha ao resetar'); else alert('Senha alterada.');
+          };
+        });
+      }
+      $('create').onclick = async () => {
+        const email = $('email').value.trim();
+        const name = $('name').value.trim();
+        const role = $('role').value;
+        const password = $('password').value.trim();
+        if (!email || !password) { alert('Email e senha são obrigatórios'); return; }
+        const r = await fetch('/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email, name, role, password }) });
+        if (!r.ok) { const t = await r.text(); alert('Falha ao criar: '+t); return; }
+        $('email').value=''; $('name').value=''; $('password').value='';
+        await load();
+      };
+      load();
+    </script>
+  </body>
+  </html>
+
