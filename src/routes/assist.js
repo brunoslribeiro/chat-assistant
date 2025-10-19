@@ -5,4 +5,4 @@ import { postAssistReply, getAssistStream } from '../controllers/assistControlle
 export const assistRouter = express.Router();
 assistRouter.post('/assist/reply', requireAuth, postAssistReply);
 assistRouter.get('/assist/stream', requireAuth, getAssistStream);
-
+assistRouter.post('/assist/stream', requireAuth, getAssistStream);

@@ -1,4 +1,5 @@
 import { config } from '../config/env.js';
+import { v4 as uuidv4 } from 'uuid';
 import { Message } from '../models/Message.js';
 import { Decision } from '../models/Decision.js';
 import { MessageService } from '../services/MessageService.js';
@@ -16,8 +17,13 @@ const assistService = new AssistConversationService({ messageService, decisionSe
 export async function postAssistReply(req, res) {
   try {
     assistService.ensureAssistantConfigured(config.OPENAI_ASSISTANT_ID);
-    const { threadId, latestUserInput } = req.body || {};
-    if (!threadId) return res.status(400).json({ error: 'threadId é obrigatório' });
+    let { threadId, latestUserInput } = req.body || {};
+    if (!threadId || !String(threadId).trim()) {
+      threadId = uuidv4();
+    }
+    // Always enable the low-latency path and flattened payload for Salesforce
+    const fast = true;
+    const flat = true;
 
     await messageService.createUserMessage(threadId, latestUserInput);
     const openaiThreadId = await assistService.ensureThread(threadId);
@@ -27,12 +33,26 @@ export async function postAssistReply(req, res) {
       await assistService.sendUserMessage(openaiThreadId, latestUserInput);
     }
 
+    if (fast) {
+      // Use streaming under the hood for faster first-decision response
+      const { decision, text } = await assistService.fastDecisionViaStream(openaiThreadId, threadId);
+      const replyText = decision?.display_text || text || '';
+      await assistService.persistArtifacts(threadId, openaiThreadId, replyText, decision || null);
+      if (flat) {
+        const payload = assistService.buildSSEPayload(threadId, decision || {});
+        return res.json(payload);
+      }
+      return res.json({ threadId, openaiThreadId, reply: replyText, decision: decision || null });
+    }
+
     const runId = await assistService.startRun(openaiThreadId);
     const { lastDecision } = await assistService.pollUntilSettled(openaiThreadId, runId);
-
     const replyText = await assistService.fetchFinalReply(openaiThreadId, lastDecision);
     await assistService.persistArtifacts(threadId, openaiThreadId, replyText, lastDecision);
-
+    if (flat) {
+      const payload = assistService.buildSSEPayload(threadId, lastDecision || {});
+      return res.json({ ...payload, reply: replyText || payload.display_text || '' });
+    }
     res.json({ threadId, openaiThreadId, reply: replyText || '', decision: lastDecision || null });
   } catch (e) {
     const status = e?.status || 500;
@@ -45,12 +65,19 @@ export async function postAssistReply(req, res) {
 export async function getAssistStream(req, res) {
   try {
     assistService.ensureAssistantConfigured(config.OPENAI_ASSISTANT_ID);
-    const threadId = String(req.query.threadId || '').trim();
-    const latestUserInput = typeof req.query.latestUserInput === 'string' ? req.query.latestUserInput : '';
-    if (!threadId) return res.status(400).json({ error: 'threadId is required' });
+    const isPost = req.method === 'POST';
+    let threadId = String((isPost ? (req.body?.threadId) : req.query.threadId) || '').trim();
+    const latestUserInput = isPost
+      ? (typeof req.body?.latestUserInput === 'string' ? req.body.latestUserInput : '')
+      : (typeof req.query.latestUserInput === 'string' ? req.query.latestUserInput : '');
+    if (!threadId) {
+      threadId = uuidv4();
+    }
 
     sseService.init(res);
     const openaiThreadId = await assistService.ensureThread(threadId);
+    // Informe imediatamente o identificador ao cliente para futuras chamadas
+    sseService.send(res, 'thread', { threadId, openaiThreadId });
 
     if (latestUserInput?.trim()) {
       await assistService.cancelActiveRun(openaiThreadId);

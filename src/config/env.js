@@ -6,6 +6,9 @@ export const config = {
   AUTH_TOKEN: process.env.AUTH_TOKEN || null,
   ASSIST_POLL_MS: Number(process.env.ASSIST_POLL_MS || 200),
   ASSIST_POLL_TIMEOUT_MS: Number(process.env.ASSIST_POLL_TIMEOUT_MS || 15000),
+  // Defaults for /assist/reply behavior (make it transparent for Salesforce)
+  REPLY_FAST_DEFAULT: String(process.env.REPLY_FAST_DEFAULT ?? 'true').toLowerCase() === 'true',
+  REPLY_FLAT_DEFAULT: String(process.env.REPLY_FLAT_DEFAULT ?? 'true').toLowerCase() === 'true'
 };
 
 export function assertRequiredEnv() {
@@ -13,4 +16,3 @@ export function assertRequiredEnv() {
     throw new Error('Faltou OPENAI_API_KEY no .env');
   }
 }
-
