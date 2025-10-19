@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat Assistant (SSE Test)</title>
+    <style>
+      :root { --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --acc:#22c55e; --chip:#1f2937; }
+      body { margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+      header { padding:16px; border-bottom:1px solid #1e293b; display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
+      header .field { display:flex; flex-direction:column; gap:6px; }
+      header label { font-size:12px; color:var(--muted); }
+      header input { padding:8px 10px; border:1px solid #1e293b; background:#0b1220; color:var(--fg); border-radius:6px; min-width:220px; }
+      main { max-width:900px; margin:0 auto; padding:16px; }
+      #log { display:flex; flex-direction:column; gap:12px; min-height:50vh; padding-bottom:80px; }
+      .wrap { display:flex; flex-direction:column; gap:6px; }
+      .wrap.user { align-items:flex-end; }
+      .wrap.assistant { align-items:flex-start; }
+      .label { font-size:11px; color:var(--muted); opacity:0.9; }
+      .label.user { color:#93c5fd; }
+      .label.agent { color:#86efac; }
+      .msg { padding:10px 12px; border-radius:12px; max-width:80%; white-space:pre-wrap; border:1px solid #1e293b; }
+      .user { background:#14243b; border-color:#1e3a8a; }
+      .assistant { background:#132235; border-color:#14532d; }
+      .meta { font-size:12px; color:var(--muted); margin-top:4px; }
+      .row { display:flex; gap:8px; margin-top:12px; }
+      #input { flex:1; padding:12px; border-radius:8px; border:1px solid #1e293b; background:#0b1220; color:var(--fg); }
+      button { padding:10px 14px; border-radius:8px; border:1px solid #1e293b; background:#0b1220; color:var(--fg); cursor:pointer; }
+      button.primary { background:linear-gradient(135deg,#16a34a,#22c55e); color:#07110a; border:none; }
+      .chip { display:inline-block; background:var(--chip); padding:4px 8px; border-radius:999px; font-size:12px; color:var(--muted); }
+      .decision { background:#0b1726; border:1px solid #1e293b; padding:8px; border-radius:8px; margin-top:6px; }
+      a { color:#60a5fa; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="field">
+        <label>Thread ID</label>
+        <input id="threadId" placeholder="auto (gera se vazio)" />
+      </div>
+      <div class="field">
+        <label>Base URL</label>
+        <input id="baseUrl" value="" placeholder="ex.: http://localhost:8080" />
+      </div>
+      <div class="field">
+        <label>Auth Token (opcional)</label>
+        <input id="token" placeholder="Authorization: Bearer <TOKEN>" />
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <span id="status" class="chip">idle</span>
+      </div>
+    </header>
+    <main>
+      <div id="log"></div>
+      <div class="row">
+        <input id="input" placeholder="Digite sua mensagem e pressione Enter…" />
+        <button id="send" class="primary">Enviar</button>
+      </div>
+      <p class="meta">Dica: use o endpoint de streaming <code>/assist/stream</code>. O campo "Base URL" pode ser deixado vazio para usar o mesmo host desta página.</p>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const $log = $('log');
+      const $input = $('input');
+      const $send = $('send');
+      const $threadId = $('threadId');
+      const $baseUrl = $('baseUrl');
+      const $token = $('token');
+      const $status = $('status');
+
+      function ensureThreadId() {
+        let tid = $threadId.value.trim();
+        if (!tid) {
+          tid = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('thread-' + Date.now());
+          $threadId.value = tid;
+        }
+        return tid;
+      }
+
+      function line()
+      { const d = document.createElement('div'); return d; }
+
+      function addUserMessage(text) {
+        const wrap = line(); wrap.className = 'wrap user';
+        const lbl = line(); lbl.className = 'label user'; lbl.textContent = 'Usuário';
+        const b = line(); b.className = 'msg user'; b.textContent = text;
+        wrap.appendChild(lbl);
+        wrap.appendChild(b);
+        $log.appendChild(wrap);
+        $log.scrollTop = $log.scrollHeight;
+      }
+
+      function addAssistantMessage() {
+        const wrap = line(); wrap.className = 'wrap assistant';
+        const lbl = line(); lbl.className = 'label agent'; lbl.textContent = 'Agente';
+        const b = line(); b.className = 'msg assistant';
+        const meta = line(); meta.className = 'meta'; meta.textContent = 'streaming…';
+        wrap.appendChild(lbl);
+        wrap.appendChild(b);
+        wrap.appendChild(meta);
+        $log.appendChild(wrap);
+        $log.scrollTop = $log.scrollHeight;
+        return { box: b, meta };
+      }
+
+      function addDecision(dec) {
+        const d = document.createElement('div');
+        d.className = 'decision';
+        d.textContent = 'Decision: ' + JSON.stringify(dec);
+        $log.appendChild(d);
+        $log.scrollTop = $log.scrollHeight;
+      }
+
+      function setBusy(busy) {
+        $input.disabled = busy; $send.disabled = busy;
+        $status.textContent = busy ? 'processing' : 'idle';
+        $status.style.background = busy ? '#2a3346' : '';
+      }
+
+      async function sendMessage() {
+        const text = $input.value.trim();
+        if (!text) return;
+        const base = $baseUrl.value.trim() || '';
+        const tid = ensureThreadId();
+        addUserMessage(text);
+        const { box, meta } = addAssistantMessage();
+        $input.value = '';
+        setBusy(true);
+
+        try {
+          const url = `${base}/assist/stream?threadId=${encodeURIComponent(tid)}&latestUserInput=${encodeURIComponent(text)}`;
+          const headers = {};
+          const tok = $token.value.trim();
+          if (tok) headers['Authorization'] = `Bearer ${tok}`;
+
+          // Parse SSE manually using fetch + reader so we can pass headers
+          const resp = await fetch(url, { headers });
+          if (!resp.ok) {
+            const t = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${t}`);
+          }
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let finalTextSet = false;
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let idx;
+            while ((idx = buffer.indexOf('\n\n')) !== -1) {
+              const raw = buffer.slice(0, idx);
+              buffer = buffer.slice(idx + 2);
+              const lines = raw.split('\n');
+              let evt = 'message';
+              let dataStr = '';
+              for (const l of lines) {
+                if (l.startsWith('event:')) evt = l.slice(6).trim();
+                else if (l.startsWith('data:')) dataStr += l.slice(5).trim();
+              }
+              if (!dataStr) continue;
+              let payload = null;
+              try { payload = JSON.parse(dataStr); } catch { payload = { raw: dataStr }; }
+
+              if (evt === 'delta') {
+                if (payload.text) {
+                  box.textContent += payload.text;
+                }
+                meta.textContent = 'streaming…';
+              } else if (evt === 'decision') {
+                addDecision(payload);
+              } else if (evt === 'completed') {
+                if (!finalTextSet && payload.reply) {
+                  box.textContent = payload.reply;
+                  finalTextSet = true;
+                }
+                meta.textContent = 'completed';
+                setBusy(false);
+              } else if (evt === 'error') {
+                meta.textContent = 'error';
+                setBusy(false);
+              }
+            }
+          }
+        } catch (e) {
+          const err = e && e.message ? e.message : String(e);
+          const wrap = document.createElement('div');
+          wrap.className = 'meta';
+          wrap.textContent = 'Erro: ' + err;
+          $log.appendChild(wrap);
+          setBusy(false);
+        }
+      }
+
+      $send.addEventListener('click', sendMessage);
+      $input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+    </script>
+  </body>
+  </html>

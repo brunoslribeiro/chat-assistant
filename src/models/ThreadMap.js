@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import { mongoose } from '../db/mongoose.js';
 const ThreadMapSchema = new mongoose.Schema({
   threadId: { type: String, unique: true, index: true },
   openaiThreadId: { type: String, index: true },

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import { mongoose } from '../db/mongoose.js';
 const DecisionSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   threadId: { type: String, index: true, required: true },

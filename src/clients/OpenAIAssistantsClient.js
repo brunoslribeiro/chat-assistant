@@ -1,5 +1,5 @@
-import axios from 'axios';
-import { ThreadMap } from '../ThreadMap.js';
+import { httpClient as axios } from './HttpClient.js';
+import { ThreadMap } from '../models/ThreadMap.js';
 
 const baseHeaders = (OPENAI_API_KEY) => ({
   Authorization: `Bearer ${OPENAI_API_KEY}`,
@@ -32,6 +32,14 @@ export async function runAssistant({ openaiThreadId, assistantId, OPENAI_API_KEY
   return run?.data?.id;
 }
 
+export async function openaiStreamRun({ openaiThreadId, assistantId, OPENAI_API_KEY }) {
+  const url = `https://api.openai.com/v1/threads/${openaiThreadId}/runs`;
+  return axios.post(url, { assistant_id: assistantId, stream: true }, {
+    headers: { ...baseHeaders(OPENAI_API_KEY), Accept: 'text/event-stream' },
+    responseType: 'stream'
+  });
+}
+
 export async function fetchRun({ openaiThreadId, runId, OPENAI_API_KEY }) {
   const r = await axios.get(`https://api.openai.com/v1/threads/${openaiThreadId}/runs/${runId}`, {
     headers: baseHeaders(OPENAI_API_KEY)
@@ -48,7 +56,7 @@ export async function submitToolOutputs({ openaiThreadId, runId, outputs, OPENAI
 export async function fetchLatestAssistantText({ openaiThreadId, OPENAI_API_KEY }) {
   const msgs = await axios.get(`https://api.openai.com/v1/threads/${openaiThreadId}/messages`, {
     headers: baseHeaders(OPENAI_API_KEY),
-    params: { limit: 10, order: 'desc' }
+    params: { limit: 1, order: 'desc' }
   });
   const assistantMsg = (msgs?.data?.data || []).find(m => m.role === 'assistant');
   const content = assistantMsg?.content?.[0]?.text?.value || '';
@@ -92,4 +100,29 @@ export async function waitUntilNoActiveRun({
     await new Promise(res => setTimeout(res, pollMs));
   }
   return { ok: false };
+}
+
+// Best-effort: check once and cancel active run without long waiting
+export async function cancelLatestActiveRunIfAny({ openaiThreadId, OPENAI_API_KEY }) {
+  const active = new Set(["queued","in_progress","requires_action"]);
+  const r = await axios.get(
+    `https://api.openai.com/v1/threads/${openaiThreadId}/runs`,
+    { headers: baseHeaders(OPENAI_API_KEY), params: { limit: 1, order: 'desc' } }
+  );
+  const latest = (r?.data?.data || [])[0];
+  if (latest && active.has(latest.status)) {
+    try {
+      await axios.post(
+        `https://api.openai.com/v1/threads/${openaiThreadId}/runs/${latest.id}/cancel`,
+        {},
+        { headers: baseHeaders(OPENAI_API_KEY) }
+      );
+      // Small delay to let cancellation propagate
+      await new Promise(res => setTimeout(res, 150));
+      return { cancelled: true, runId: latest.id };
+    } catch (e) {
+      return { cancelled: false, runId: latest.id, error: e };
+    }
+  }
+  return { cancelled: false, runId: null };
 }

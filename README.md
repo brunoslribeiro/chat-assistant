@@ -42,10 +42,17 @@ docker compose up --build
 O serviço `mongo` é inicializado com usuário/senha `root`/`rootpass`. A aplicação usa a URI já configurada no `docker-compose.yml`.
 
 ## Estrutura
-- `server.js`: define rotas HTTP e integrações com MongoDB e OpenAI.
-- `helpers/assistants.js`: funções utilitárias para Threads e Runs da OpenAI.
-- `ThreadMap.js`: mapeia `threadId` locais para `openaiThreadId`.
-- `catalog.js`: tabela de candidatos válidos e filas Salesforce correspondentes.
+- `server.js`: bootstrap do app (Express, rotas e conexão Mongo).
+- `src/config/env.js`: configuração centralizada de variáveis de ambiente.
+- `src/db/mongoose.js`: conexão com MongoDB.
+- `src/models/Message.js`, `src/models/Decision.js`, `src/models/ThreadMap.js`: modelos Mongoose.
+- `src/clients/HttpClient.js`: cliente HTTP (Axios) com keep-alive.
+- `src/clients/OpenAIAssistantsClient.js`: adapter para OpenAI Assistants v2 (threads, runs, mensagens, stream).
+- `src/controllers/assistController.js`, `src/controllers/healthController.js`: regras de cada rota.
+- `src/routes/assist.js`, `src/routes/health.js`: definição das rotas Express.
+- `src/middleware/auth.js`: autenticação Bearer opcional.
+- `src/domain/RoutingCatalog.js`: mapeamentos de candidatos e filas (Salesforce).
+- `public/index.html`: frontend simples para teste (SSE).
 
 ## Rotas
 Todas as rotas aceitam/retornam JSON e, se `AUTH_TOKEN` estiver definido, exigem header `Authorization: Bearer <token>`.
@@ -135,6 +142,18 @@ Processo resumido:
   }
 }
 ```
+
+### `GET /assist/stream`
+Streaming via SSE baseado no Assistants v2 (baixa latência perceptível).
+
+Parâmetros de query:
+- `threadId` (obrigatório)
+- `latestUserInput` (opcional)
+
+Exemplos de eventos enviados:
+- `delta`: `{ "text": "<chunk>" }`
+- `decision`: objeto com roteamento (`emit_routing`)
+- `completed`: `{ "reply": "<texto final>" }`
 
 ## Desenvolvimento
 - Logs de erros de OpenAI aparecem no console com status HTTP e corpo retornado.

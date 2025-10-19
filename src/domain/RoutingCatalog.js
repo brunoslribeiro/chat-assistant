@@ -11,3 +11,4 @@ export const SALESFORCE_QUEUE_BY_CANDIDATE = {
   'MARALTO::Secretaria': 'Queue_Secretaria_Maralto',
   'MARALTO::Comercial': 'Queue_Comercial_Maralto'
 };
+
