@@ -301,7 +301,7 @@ Resposta tipica no modo flat:
 {
   "threadId": "thread-123",
   "display_text": "Encaminhei sua solicitacao para o time financeiro.",
-  "candidate_id": "COC::Financeiro",
+  "candidate_id": "UNIDADE::AREA",
   "confidence": 0.92,
   "abstain": false,
   "rationale": "Dados apontam para fila financeira",
@@ -464,16 +464,9 @@ Campos:
 
 ## Roteamento e integracao externa
 
-O projeto contem um catalogo simples de candidatos e filas:
+O projeto contem um catalogo simples de candidatos e filas internas.
 
-- `COC::Financeiro`
-- `COC::Secretaria`
-- `COC::Comercial`
-- `MARALTO::Financeiro`
-- `MARALTO::Secretaria`
-- `MARALTO::Comercial`
-
-Esses candidatos sao traduzidos para filas Salesforce em `src/domain/RoutingCatalog.js`.
+Esses candidatos sao traduzidos para filas de atendimento em `src/domain/RoutingCatalog.js`.
 
 Quando o assistant chama a funcao `emit_routing`, o backend:
 
