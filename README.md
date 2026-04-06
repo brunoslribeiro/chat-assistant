@@ -1,171 +1,556 @@
 # Chat Assistant
 
-Serviço Node.js para armazenar histórico de conversas em MongoDB e interagir com a API da OpenAI, oferecendo dois fluxos de resposta: completions tradicionais e o fluxo Assistants v2 com ferramentas.
+Aplicacao Node.js/Express com MongoDB para operar um assistente baseado em OpenAI Assistants v2, com:
 
-## Visão geral
-- **Persistência**: todas as mensagens são guardadas em MongoDB com TTL opcional e índice por thread.
-- **Integração OpenAI**: suporte tanto para `chat.completions` quanto para Threads/Assistants v2 (com cancelamento automático de runs pendentes e submissão de tool outputs).
-- **Autenticação opcional**: um token Bearer pode ser exigido em todas as rotas.
-- **Contexto configurável**: limite de mensagens e caracteres reaproveitados em cada chamada pode ser ajustado por variáveis de ambiente.
+- chat web autenticado
+- area administrativa para auditoria de threads, decisoes e usuarios
+- integracao com OpenAI Threads/Runs
+- persistencia local de mensagens e decisoes em MongoDB
+- suporte a streaming SSE e resposta JSON tradicional
 
-## Requisitos
+## Visao geral
+
+O projeto expõe uma interface web simples e uma API HTTP no mesmo processo:
+
+- a raiz `/` redireciona para a area administrativa se houver sessao ativa
+- usuarios nao autenticados sao enviados para `/login.html`
+- o chat autenticado fica em `/chat`
+- a area administrativa fica em `/admin/`
+- as chamadas ao assistant acontecem em `/assist/reply` e `/assist/stream`
+
+O backend mantem um mapeamento entre `threadId` local e `openaiThreadId` remoto, salva mensagens e decisoes no MongoDB e, quando o assistant pede `emit_routing`, transforma isso em um payload normalizado com campos como `candidate_id`, `confidence`, `abstain` e `display_text`.
+
+## Stack
+
 - Node.js 20+
+- Express 4
 - MongoDB 6+
-- Conta na OpenAI com chave de API válida
-- (Opcional) Docker e Docker Compose
+- Mongoose 8
+- OpenAI Assistants v2
+- Docker / Docker Compose opcionais
 
-## Configuração
-1. Copie `.env.example` (se existir) ou crie um arquivo `.env` com as variáveis abaixo.
-2. Instale dependências: `npm install`.
-3. Suba uma instância MongoDB local ou use a conexão fornecida em `MONGODB_URI`.
-4. Inicie o servidor com `npm start`.
+## Estrutura
 
-### Variáveis de ambiente
-| Variável | Obrigatório | Default | Descrição |
+### Backend
+
+- `server.js`: bootstrap do Express, middlewares, rotas web e API, conexao com Mongo.
+- `src/config/env.js`: leitura e validacao das variaveis de ambiente.
+- `src/db/mongoose.js`: conexao Mongoose.
+- `src/routes/*.js`: definicao das rotas HTTP.
+- `src/controllers/*.js`: regras de entrada/saida HTTP.
+- `src/services/AssistConversationService.js`: orquestracao principal do fluxo com a OpenAI.
+- `src/clients/OpenAIAssistantsClient.js`: chamadas HTTP para threads, runs, mensagens e streaming da OpenAI.
+- `src/domain/*.js`: interpretacao de eventos do streaming e decisao de roteamento.
+- `src/models/*.js`: colecoes MongoDB.
+- `src/middleware/*.js`: autenticacao por bearer token opcional e autenticacao por cookie de sessao.
+
+### Frontend
+
+- `public/login.html`: tela de login. Se nao existir nenhum usuario, o primeiro acesso tenta bootstrap via `/auth/register`.
+- `public/index.html`: tela de chat autenticada.
+- `public/admin/index.html`: listagem de threads.
+- `public/admin/thread.html`: detalhe de uma thread.
+- `public/admin/dashboard.html`: indicadores agregados.
+- `public/admin/users.html`: administracao de usuarios.
+
+## Como a aplicacao funciona
+
+### 1. Autenticacao web
+
+- O login web usa cookie `session`, assinado com `SESSION_SECRET`.
+- O primeiro usuario do sistema pode ser criado automaticamente via `POST /auth/register`.
+- Depois que ja existe um usuario, novos cadastros publicos sao bloqueados.
+- Apenas usuarios `admin` podem criar usuarios e resetar senhas.
+
+### 2. Conversa com a OpenAI
+
+Fluxo de `/assist/reply`:
+
+1. Garante que `OPENAI_ASSISTANT_ID` exista.
+2. Gera `threadId` se o cliente nao enviar um.
+3. Salva a mensagem do usuario no MongoDB.
+4. Garante ou cria o `openaiThreadId` remoto.
+5. Cancela o ultimo run ativo, se houver.
+6. Envia a nova mensagem para a thread na OpenAI.
+7. Executa o assistant, por padrao no caminho rapido baseado em streaming.
+8. Se houver tool call `emit_routing`, transforma a decisao em payload local.
+9. Faz fallback para buscar a resposta final da thread se o streaming rapido nao retornar texto suficiente.
+10. Persiste a resposta do assistant e a decisao no MongoDB.
+11. Retorna JSON para o cliente.
+
+Fluxo de `/assist/stream`:
+
+- inicia uma resposta SSE
+- envia o evento inicial `thread`
+- repassa `delta` conforme a OpenAI gera texto
+- publica `decision` quando aparece `emit_routing`
+- encerra com `completed`
+
+### 3. Persistencia
+
+Colecoes principais:
+
+- `Message`: mensagens `user` e `assistant`
+- `Decision`: decisoes de roteamento retornadas pelo assistant
+- `ThreadMap`: relacao entre `threadId` local e `openaiThreadId`
+- `User`: usuarios da interface administrativa
+
+## Variaveis de ambiente
+
+Estas sao as variaveis realmente usadas pelo codigo atual:
+
+| Variavel | Obrigatoria | Default | Uso |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | Sim | — | Chave de API usada em todas as chamadas à OpenAI. A aplicação encerra se estiver ausente. |
-| `OPENAI_MODEL` | Não | `gpt-4o-mini` | Modelo usado na rota `/reply`. |
-| `OPENAI_ASSISTANT_ID` | Para Assistants | — | Identificador do assistant v2. Sem ele, `/assist/reply` retorna `assistant_not_configured`. |
-| `PORT` | Não | `8080` | Porta HTTP local. |
-| `MONGODB_URI` | Não | `mongodb://localhost:27017/chatdb` | URI de conexão do MongoDB. |
-| `AUTH_TOKEN` | Não | `null` | Se definido, todas as rotas exigem `Authorization: Bearer <token>`. |
-| `MAX_MESSAGES` | Não | `50` | Máximo de mensagens resgatadas ao montar contexto. |
-| `MAX_CHARS` | Não | `16000` | Limite de caracteres para o contexto acumulado. |
-| `TTL_HOURS` | Não | `0` | Quando > 0, cada mensagem recebe `expiresAt` com TTL de `TTL_HOURS`. |
-| `ASSIST_POLL_MS` | Não | `800` | Intervalo de pooling ao aguardar runs do Assistants v2. |
-| `ASSIST_POLL_TIMEOUT_MS` | Não | `20000` | Timeout máximo ao aguardar conclusão de runs. |
+| `OPENAI_API_KEY` | Sim | - | Chave usada nas chamadas para a OpenAI. A aplicacao nao inicia sem ela. |
+| `OPENAI_ASSISTANT_ID` | Sim para responder | - | Assistant v2 usado em `/assist/reply` e `/assist/stream`. |
+| `PORT` | Nao | `8080` | Porta HTTP local. |
+| `MONGODB_URI` | Nao | `mongodb://localhost:27017/chatdb` | URI de conexao do MongoDB. |
+| `AUTH_TOKEN` | Nao | `null` | Se definido, exige `Authorization: Bearer <token>` nas rotas `/assist/*`. |
+| `ASSIST_POLL_MS` | Nao | `200` | Intervalo de polling em partes do fluxo de runs. |
+| `ASSIST_POLL_TIMEOUT_MS` | Nao | `15000` | Timeout maximo ao aguardar conclusao de runs. |
+| `REPLY_FAST_DEFAULT` | Nao | `true` | Ativa o caminho rapido baseado em streaming em `/assist/reply`. |
+| `REPLY_FLAT_DEFAULT` | Nao | `true` | Faz `/assist/reply` responder no formato flat esperado por integracoes externas. |
+| `SESSION_SECRET` | Nao, mas recomendado | `dev-secret` | Segredo usado para assinar o cookie de sessao. |
+| `NODE_ENV` | Nao | - | Em `production`, o cookie de sessao recebe `Secure` e `SameSite=None`. |
+| `DEBUG_SSE` | Nao | `false` | Habilita logs de eventos SSE no console. |
+| `DEBUG_RUN` | Nao | `false` | Habilita logs de polling e estados de run. |
 
-### Execução com Docker Compose
+### Variaveis legadas no `.env.sample`
+
+O arquivo `.env.sample` ainda contem algumas variaveis antigas, como `OPENAI_MODEL`, `MAX_MESSAGES`, `MAX_CHARS` e `TTL_HOURS`, mas o codigo atual nao as utiliza.
+
+## Exemplo de `.env`
+
+```env
+PORT=8080
+MONGODB_URI=mongodb://localhost:27017/chatdb
+OPENAI_API_KEY=<sua-chave>
+OPENAI_ASSISTANT_ID=<assistant-id>
+AUTH_TOKEN=
+ASSIST_POLL_MS=800
+ASSIST_POLL_TIMEOUT_MS=20000
+REPLY_FAST_DEFAULT=true
+REPLY_FLAT_DEFAULT=true
+SESSION_SECRET=troque-isto-em-producao
+DEBUG_SSE=false
+DEBUG_RUN=false
+```
+
+## Executando localmente
+
+### Sem Docker
+
+1. Instale dependencias:
+
+```bash
+npm install
+```
+
+2. Garanta um MongoDB acessivel.
+
+3. Configure o `.env`.
+
+4. Inicie a aplicacao:
+
+```bash
+npm start
+```
+
+5. Acesse:
+
+- `http://localhost:8080/login.html`
+- `http://localhost:8080/admin/`
+- `http://localhost:8080/chat`
+
+### Com Docker Compose
+
+O `docker-compose.yml` sobe:
+
+- `mongo` com usuario `root` e senha `rootpass`
+- `app` expondo `8080:8080`
+
+Subida:
+
 ```bash
 docker compose up --build
 ```
-O serviço `mongo` é inicializado com usuário/senha `root`/`rootpass`. A aplicação usa a URI já configurada no `docker-compose.yml`.
 
-## Estrutura
-- `server.js`: bootstrap do app (Express, rotas e conexão Mongo).
-- `src/config/env.js`: configuração centralizada de variáveis de ambiente.
-- `src/db/mongoose.js`: conexão com MongoDB.
-- `src/models/Message.js`, `src/models/Decision.js`, `src/models/ThreadMap.js`: modelos Mongoose.
-- `src/clients/HttpClient.js`: cliente HTTP (Axios) com keep-alive.
-- `src/clients/OpenAIAssistantsClient.js`: adapter para OpenAI Assistants v2 (threads, runs, mensagens, stream).
-- `src/controllers/assistController.js`, `src/controllers/healthController.js`: regras de cada rota.
-- `src/routes/assist.js`, `src/routes/health.js`: definição das rotas Express.
-- `src/middleware/auth.js`: autenticação Bearer opcional.
-- `src/domain/RoutingCatalog.js`: mapeamentos de candidatos e filas (Salesforce).
-- `public/index.html`: frontend simples para teste (SSE).
+Parada:
 
-## Rotas
-Todas as rotas aceitam/retornam JSON e, se `AUTH_TOKEN` estiver definido, exigem header `Authorization: Bearer <token>`.
-
-### `GET /health`
-Retorna o status da aplicação e da conexão MongoDB.
-```json
-{ "ok": true, "mongo": "up" }
+```bash
+docker compose down
 ```
 
-### `POST /messages`
-Insere uma mensagem manualmente.
+Observacao importante:
 
-**Body**
+- no `docker-compose.yml`, o app recebe `MONGODB_URI=mongodb://root:rootpass@mongo:27017/chatdb?authSource=admin`
+- esse hostname `mongo` funciona dentro da rede do Compose
+- em EC2 sem Compose, ele nao funciona; nesse caso use um hostname/IP real do Mongo
+
+## Rotas web
+
+### Navegacao
+
+- `GET /`
+  - com sessao: redireciona para `/admin/`
+  - sem sessao: redireciona para `/login.html?next=%2Fadmin%2F`
+
+- `GET /login.html`
+  - pagina de login
+
+- `GET /chat`
+  - exige sessao
+  - serve a interface de chat
+
+- `GET /admin/`
+  - exige sessao
+  - serve a lista de threads
+
+- `GET /admin/index.html`
+- `GET /admin/thread.html`
+- `GET /admin/dashboard.html`
+  - exigem sessao
+
+`public/admin/users.html` existe e pode ser servido pelo `express.static`, mas a protecao de API continua sendo feita no backend das rotas `/admin/users`.
+
+## Rotas de autenticacao
+
+### `POST /auth/register`
+
+Cria o primeiro usuario do sistema. Se ja existir qualquer usuario, responde `403 register_disabled`.
+
+Body:
+
 ```json
 {
-  "threadId": "thread-123",
-  "role": "user",
-  "content": "Mensagem enviada",
-  "externalId": "opcional"
+  "email": "admin@empresa.com",
+  "name": "Admin",
+  "password": "SenhaForte123"
 }
 ```
 
-**Respostas**
-- `201`: `{ "id": "<uuid>" }`
-- `400`: campos obrigatórios ausentes ou `role` inválido
-- `500`: erro na inserção
+Resposta:
 
-### `GET /threads/:threadId`
-Retorna todas as mensagens (ordenadas por criação) para a thread informada.
-
-### `POST /reply`
-Fluxo tradicional usando `chat.completions`.
-
-**Body**
 ```json
 {
-  "threadId": "thread-123",
-  "latestUserInput": "Olá, tudo bem?",
-  "systemPrompt": "Instrua o modelo a responder em PT-BR"
+  "id": "user-id",
+  "email": "admin@empresa.com",
+  "name": "Admin",
+  "role": "admin"
 }
 ```
 
-1. Caso `latestUserInput` exista, registra a mensagem do usuário.
-2. Busca até `MAX_MESSAGES` mensagens anteriores respeitando `MAX_CHARS`.
-3. Monta payload com prompt de sistema (default: "Você é um assistente útil...").
-4. Chama a OpenAI e salva a resposta retornada.
+### `POST /auth/login`
 
-**Resposta**
+Autentica um usuario e grava cookie de sessao.
+
+Body:
+
 ```json
 {
-  "threadId": "thread-123",
-  "reply": "Olá! Como posso ajudar?"
+  "email": "admin@empresa.com",
+  "password": "SenhaForte123"
 }
+```
+
+### `GET /auth/me`
+
+Retorna o usuario autenticado a partir do cookie de sessao.
+
+### `POST /auth/logout`
+
+Limpa o cookie `session`.
+
+### `POST /auth/change-password`
+
+Exige sessao. Altera a senha do usuario autenticado.
+
+Body:
+
+```json
+{
+  "currentPassword": "senha-atual",
+  "newPassword": "senha-nova"
+}
+```
+
+## Rotas do assistant
+
+Se `AUTH_TOKEN` estiver definido, as rotas abaixo exigem:
+
+```http
+Authorization: Bearer <AUTH_TOKEN>
 ```
 
 ### `POST /assist/reply`
-Fluxo baseado no Assistants v2. Exige `OPENAI_ASSISTANT_ID`.
 
-**Body**
+Retorna a resposta do assistant em JSON.
+
+Body:
+
 ```json
 {
   "threadId": "thread-123",
-  "latestUserInput": "Preciso de ajuda com cobrança"
+  "latestUserInput": "Preciso de ajuda com cobranca"
 }
 ```
 
-Processo resumido:
-1. Garante que existe um thread remoto (`ThreadMap`).
-2. Cancela runs pendentes antes de enviar nova mensagem.
-3. Inicia novo run e fica em loop até `requires_action` ou conclusão.
-4. Caso o assistant solicite tool outputs `emit_routing`, responde com dados de roteamento (filas Salesforce).
-5. Persist e devolve a resposta final (textual ou `display_text` do tool call).
+Resposta tipica no modo flat:
 
-**Resposta**
 ```json
 {
   "threadId": "thread-123",
-  "reply": "Encaminhei sua solicitação para o time financeiro.",
-  "openaiThreadId": "thread_abc",
-  "decision": {
-    "salesforce_queue": "Queue_Financeiro_COC",
-    "candidate_id": "COC::Financeiro",
-    "confidence": 0.92,
-    "abstain": false,
-    "rationale": "Dados apontam para fila financeira"
-  }
+  "display_text": "Encaminhei sua solicitacao para o time financeiro.",
+  "candidate_id": "COC::Financeiro",
+  "confidence": 0.92,
+  "abstain": false,
+  "rationale": "Dados apontam para fila financeira",
+  "next_steps": [],
+  "questions_needed": [],
+  "reply": "Encaminhei sua solicitacao para o time financeiro."
 }
 ```
+
+Observacoes:
+
+- se `threadId` nao for enviado, o backend gera um UUID
+- se o caminho rapido nao retornar texto suficiente, o backend busca a resposta final na thread antes de responder
 
 ### `GET /assist/stream`
-Streaming via SSE baseado no Assistants v2 (baixa latência perceptível).
+### `POST /assist/stream`
 
-Parâmetros de query:
-- `threadId` (obrigatório)
-- `latestUserInput` (opcional)
+Retornam Server-Sent Events.
 
-Exemplos de eventos enviados:
-- `delta`: `{ "text": "<chunk>" }`
-- `decision`: objeto com roteamento (`emit_routing`)
-- `completed`: `{ "reply": "<texto final>" }`
+Parametros:
 
-## Desenvolvimento
-- Logs de erros de OpenAI aparecem no console com status HTTP e corpo retornado.
-- Para limpar mensagens expiradas configure `TTL_HOURS > 0`; o índice TTL do MongoDB remove documentos automaticamente.
-- Teste a API usando ferramentas como `curl` ou Insomnia.
+- `threadId`
+- `latestUserInput`
 
-### Exemplo `curl`
+Eventos esperados:
+
+- `thread`
+- `delta`
+- `decision`
+- `completed`
+- `error`
+
+Exemplo com `curl`:
+
 ```bash
-curl -X POST http://localhost:8080/reply \
-  -H 'Content-Type: application/json' \
-  -d '{"threadId":"demo","latestUserInput":"Olá"}'
+curl -N "http://localhost:8080/assist/stream?threadId=demo&latestUserInput=Ola"
 ```
 
-## Licença
-Defina a licença aqui, se aplicável.
+## Rotas administrativas
+
+Todas exigem sessao autenticada. Algumas exigem perfil `admin`.
+
+### `GET /admin/threads`
+
+Lista threads com filtros e ordenacao.
+
+Query params:
+
+- `search`
+- `from`
+- `to`
+- `page`
+- `limit`
+- `sort` em `threadId|firstAt|lastAt|messageCount`
+- `dir` em `asc|desc`
+
+### `GET /admin/threads/:threadId/messages`
+
+Retorna:
+
+- mensagens da thread
+- decisoes da thread
+- timeline consolidada
+
+### `GET /admin/decisions`
+
+Lista decisoes com filtros por periodo, `candidate_id` e `abstain`.
+
+### `GET /admin/stats`
+
+Retorna estatisticas agregadas do periodo.
+
+### `GET /admin/export/messages`
+
+Exige `admin`. Exporta mensagens em `application/x-ndjson`.
+
+### `GET /admin/export/decisions`
+
+Exige `admin`. Exporta decisoes em `application/x-ndjson`.
+
+### `GET /admin/users`
+
+Exige `admin`. Lista usuarios.
+
+### `POST /admin/users`
+
+Exige `admin`. Cria usuario com papel `admin` ou `curator`.
+
+Body:
+
+```json
+{
+  "email": "curador@empresa.com",
+  "name": "Curador",
+  "role": "curator",
+  "password": "SenhaInicial123"
+}
+```
+
+### `POST /admin/users/:id/reset-password`
+
+Exige `admin`. Reseta a senha de um usuario.
+
+Body:
+
+```json
+{
+  "newPassword": "NovaSenha123"
+}
+```
+
+## Modelos de dados
+
+### `Message`
+
+Campos:
+
+- `_id`
+- `threadId`
+- `role` em `user|assistant`
+- `content`
+- `createdAt`
+
+Indices:
+
+- `{ threadId: 1, createdAt: 1 }`
+- indice text em `content`
+
+### `Decision`
+
+Campos:
+
+- `_id`
+- `threadId`
+- `openaiThreadId`
+- `decision`
+- `createdAt`
+
+Indice:
+
+- `{ threadId: 1, createdAt: -1 }`
+
+### `ThreadMap`
+
+Campos:
+
+- `threadId`
+- `openaiThreadId`
+- `createdAt`
+
+### `User`
+
+Campos:
+
+- `email`
+- `name`
+- `passwordHash`
+- `role` em `admin|curator`
+- `createdAt`
+
+## Roteamento e integracao externa
+
+O projeto contem um catalogo simples de candidatos e filas:
+
+- `COC::Financeiro`
+- `COC::Secretaria`
+- `COC::Comercial`
+- `MARALTO::Financeiro`
+- `MARALTO::Secretaria`
+- `MARALTO::Comercial`
+
+Esses candidatos sao traduzidos para filas Salesforce em `src/domain/RoutingCatalog.js`.
+
+Quando o assistant chama a funcao `emit_routing`, o backend:
+
+1. le os argumentos da tool call
+2. monta a decisao normalizada
+3. devolve o resultado como `tool_output`
+4. persiste a decisao localmente
+
+## Logs e debug
+
+Logs normais:
+
+- inicializacao do servidor
+- erros de `/assist/reply`
+- erros de `/assist/stream`
+
+Logs opcionais:
+
+- `DEBUG_RUN=true`: estados de runs e submits de tool outputs
+- `DEBUG_SSE=true`: eventos SSE, decisoes e fallback de texto
+
+Exemplo:
+
+```bash
+DEBUG_RUN=true DEBUG_SSE=true npm start
+```
+
+## Operacao em EC2 / proxy reverso
+
+Pontos importantes para deploy:
+
+- a app escuta em `PORT`, por padrao `8080`
+- o healthcheck HTTP e `GET /health`
+- o chat usa SSE em `/assist/stream`; gateways e proxies precisam suportar conexoes longas/streaming
+- se `NODE_ENV=production`, o cookie de sessao usa `Secure`, entao o acesso deve passar por HTTPS
+- se o balanceador terminar TLS e encaminhar HTTP para a app, verifique se o navegador ainda recebe o cookie de sessao corretamente
+
+## Limites e observacoes
+
+- o `README` anterior descrevia rotas `/reply`, `/messages` e `/threads/:threadId` que nao existem mais no codigo atual
+- `OPENAI_MODEL` aparece em arquivos de exemplo, mas nao participa do fluxo atual
+- nao existem testes automatizados configurados neste repositório
+
+## Exemplos de verificacao rapida
+
+### Health
+
+```bash
+curl http://localhost:8080/health
+```
+
+### Criar primeiro usuario
+
+```bash
+curl -X POST http://localhost:8080/auth/register \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"admin@empresa.com\",\"password\":\"SenhaForte123\"}"
+```
+
+### Login
+
+```bash
+curl -i -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"admin@empresa.com\",\"password\":\"SenhaForte123\"}"
+```
+
+### Resposta JSON do assistant
+
+```bash
+curl -X POST http://localhost:8080/assist/reply \
+  -H "Content-Type: application/json" \
+  -d "{\"threadId\":\"demo\",\"latestUserInput\":\"Ola\"}"
+```
+
+### Streaming SSE
+
+```bash
+curl -N "http://localhost:8080/assist/stream?threadId=demo&latestUserInput=Ola"
+```
