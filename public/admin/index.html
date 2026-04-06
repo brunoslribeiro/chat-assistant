@@ -12,6 +12,7 @@
       table{width:100%;border-collapse:collapse}
       th,td{border-bottom:1px solid #1e293b;padding:8px;text-align:left;font-size:14px}
       a{color:#93c5fd}
+      thead th[role="button"]{cursor:pointer}
     </style>
   </head>
   <body>
@@ -26,17 +27,41 @@
     </header>
     <main>
       <table>
-        <thead><tr><th>Thread</th><th>Primeira</th><th>Última</th><th>Msgs</th></tr></thead>
+        <thead>
+          <tr>
+            <th data-sort="threadId" role="button" tabindex="0">Thread</th>
+            <th data-sort="firstAt" role="button" tabindex="0">Primeira</th>
+            <th data-sort="lastAt" role="button" tabindex="0">Última</th>
+            <th data-sort="messageCount" role="button" tabindex="0">Msgs</th>
+          </tr>
+        </thead>
         <tbody id="rows"></tbody>
       </table>
     </main>
     <script>
       const $ = id => document.getElementById(id);
+      let currentSort = 'lastAt';
+      let currentDir = 'desc';
+
+      function renderHeaderIndicators(){
+        const ths = document.querySelectorAll('thead th[data-sort]');
+        ths.forEach(th => {
+          const key = th.getAttribute('data-sort');
+          const isActive = key === currentSort;
+          const arrow = isActive ? (currentDir === 'asc' ? ' ▲' : ' ▼') : '';
+          th.setAttribute('aria-sort', isActive ? currentDir : 'none');
+          const base = th.textContent.replace(/[\s▲▼]+$/,'');
+          th.textContent = base + arrow;
+        });
+      }
+
       async function load(){
         const q = new URLSearchParams();
         if ($('search').value.trim()) q.set('search',$('search').value.trim());
         if ($('from').value) q.set('from',new Date($('from').value).toISOString());
         if ($('to').value) q.set('to',new Date($('to').value).toISOString());
+        q.set('sort', currentSort);
+        q.set('dir', currentDir);
         const r = await fetch('/admin/threads?'+q.toString());
         if (!r.ok) { alert('Falha ao carregar'); return; }
         const data = await r.json();
@@ -52,7 +77,24 @@
         }
       }
       document.getElementById('go').onclick = load;
+      document.querySelectorAll('thead th[data-sort]').forEach(th => {
+        const key = th.getAttribute('data-sort');
+        const activate = () => {
+          if (currentSort === key) {
+            currentDir = currentDir === 'asc' ? 'desc' : 'asc';
+          } else {
+            currentSort = key;
+            currentDir = (key === 'threadId') ? 'asc' : 'desc';
+          }
+          renderHeaderIndicators();
+          load();
+        };
+        th.addEventListener('click', activate);
+        th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
+      });
+      renderHeaderIndicators();
       load();
     </script>
   </body>
   </html>
+

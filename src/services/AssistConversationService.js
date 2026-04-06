@@ -96,7 +96,21 @@ export class AssistConversationService {
   }
 
   async persistArtifacts(threadId, openaiThreadId, replyText, decision) {
-    await this.messages.createAssistantMessage(threadId, replyText);
+    let text = replyText || '';
+    if (!text.trim() && decision?.display_text) {
+      text = decision.display_text;
+    }
+    // Some environments may have mistakenly passed a JSON decision as reply.
+    // If it looks like JSON and contains display_text, use it.
+    try {
+      if (text.trim().startsWith('{') && text.trim().endsWith('}')) {
+        const obj = JSON.parse(text);
+        if (obj && typeof obj.display_text === 'string' && obj.display_text.trim()) {
+          text = obj.display_text.trim();
+        }
+      }
+    } catch {}
+    await this.messages.createAssistantMessage(threadId, text);
     await this.decisions.saveDecision(threadId, openaiThreadId, decision);
   }
 

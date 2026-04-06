@@ -21,9 +21,9 @@ export async function postAssistReply(req, res) {
     if (!threadId || !String(threadId).trim()) {
       threadId = uuidv4();
     }
-    // Always enable the low-latency path and flattened payload for Salesforce
-    const fast = true;
-    const flat = true;
+    // Keep defaults configurable for environments that prefer the safer full reply path.
+    const fast = config.REPLY_FAST_DEFAULT;
+    const flat = config.REPLY_FLAT_DEFAULT;
 
     await messageService.createUserMessage(threadId, latestUserInput);
     const openaiThreadId = await assistService.ensureThread(threadId);
@@ -36,11 +36,14 @@ export async function postAssistReply(req, res) {
     if (fast) {
       // Use streaming under the hood for faster first-decision response
       const { decision, text } = await assistService.fastDecisionViaStream(openaiThreadId, threadId);
-      const replyText = decision?.display_text || text || '';
+      let replyText = decision?.display_text || text || '';
+      if (!replyText.trim()) {
+        replyText = await assistService.fetchFinalReply(openaiThreadId, decision || null);
+      }
       await assistService.persistArtifacts(threadId, openaiThreadId, replyText, decision || null);
       if (flat) {
         const payload = assistService.buildSSEPayload(threadId, decision || {});
-        return res.json(payload);
+        return res.json({ ...payload, reply: replyText || payload.display_text || '' });
       }
       return res.json({ threadId, openaiThreadId, reply: replyText, decision: decision || null });
     }

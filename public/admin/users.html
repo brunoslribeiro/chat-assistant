@@ -12,6 +12,7 @@
       table{width:100%;border-collapse:collapse}
       th,td{border-bottom:1px solid #1e293b;padding:8px;text-align:left;font-size:14px}
       .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+      thead th[role="button"]{cursor:pointer}
     </style>
   </head>
   <body>
@@ -32,14 +33,36 @@
         <button id="create">Criar usuário</button>
       </div>
       <table>
-        <thead><tr><th>Email</th><th>Nome</th><th>Perfil</th><th>Criado</th><th>Ações</th></tr></thead>
+        <thead>
+          <tr>
+            <th data-sort="email" role="button" tabindex="0">Email</th>
+            <th data-sort="name" role="button" tabindex="0">Nome</th>
+            <th data-sort="role" role="button" tabindex="0">Perfil</th>
+            <th data-sort="createdAt" role="button" tabindex="0">Criado</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
         <tbody id="rows"></tbody>
       </table>
     </main>
     <script>
       const $ = id => document.getElementById(id);
+      let currentSort = 'createdAt';
+      let currentDir = 'desc';
+      function renderHeaderIndicators(){
+        const ths = document.querySelectorAll('thead th[data-sort]');
+        ths.forEach(th => {
+          const key = th.getAttribute('data-sort');
+          const isActive = key === currentSort;
+          const arrow = isActive ? (currentDir === 'asc' ? ' ▲' : ' ▼') : '';
+          th.setAttribute('aria-sort', isActive ? currentDir : 'none');
+          const base = th.textContent.replace(/[\s▲▼]+$/,'');
+          th.textContent = base + arrow;
+        });
+      }
       async function load(){
-        const r = await fetch('/admin/users');
+        const qp = new URLSearchParams({ sort: currentSort, dir: currentDir });
+        const r = await fetch('/admin/users?'+qp.toString());
         if (!r.ok) { alert('Falha ao carregar usuários'); return; }
         const data = await r.json();
         const tbody = $('rows'); tbody.innerHTML='';
@@ -59,6 +82,24 @@
           };
         });
       }
+      // Sorting interactions
+      document.querySelectorAll('thead th[data-sort]').forEach(th => {
+        const key = th.getAttribute('data-sort');
+        const activate = () => {
+          if (currentSort === key) {
+            currentDir = currentDir === 'asc' ? 'desc' : 'asc';
+          } else {
+            currentSort = key;
+            // default dirs: text asc, date desc
+            currentDir = (key === 'createdAt') ? 'desc' : 'asc';
+          }
+          renderHeaderIndicators();
+          load();
+        };
+        th.addEventListener('click', activate);
+        th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
+      });
+      renderHeaderIndicators();
       $('create').onclick = async () => {
         const email = $('email').value.trim();
         const name = $('name').value.trim();

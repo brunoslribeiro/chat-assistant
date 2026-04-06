@@ -55,6 +55,7 @@
         </div>
         <div class="field" style="align-items:flex-end">
           <div style="display:flex; gap:8px;">
+            <button id="btnBack">Voltar</button>
             <button id="btnChangePwd">Trocar senha</button>
             <button id="btnLogout">Sair</button>
           </div>
@@ -84,6 +85,47 @@
 
       // Default base URL to current origin for convenience
       try { if (!$baseUrl.value) $baseUrl.value = window.location.origin; } catch {}
+
+      // Read threadId/from from URL
+      try {
+        const qs = new URLSearchParams(location.search);
+        const tid = qs.get('threadId');
+        const from = qs.get('from');
+        if (tid) { $threadId.value = tid; }
+        const $btnBack = document.getElementById('btnBack');
+        $btnBack.onclick = () => {
+          if (from) { location.href = from; }
+          else if (document.referrer) { history.back(); }
+          else { location.href = '/admin/'; }
+        };
+      } catch {}
+
+      // Carrega histórico quando há threadId na URL/campo
+      async function loadHistoryIfAny() {
+        const tid = ($threadId.value || '').trim();
+        if (!tid) return;
+        try {
+          const r = await fetch(`/admin/threads/${encodeURIComponent(tid)}/messages`);
+          if (!r.ok) return; // silencioso se não autorizado
+          const data = await r.json();
+          if (Array.isArray(data.messages)) {
+            for (const m of data.messages) {
+              if (m.role === 'user') {
+                addUserMessage(m.content || '');
+              } else if (m.role === 'assistant') {
+                const { box, meta } = addAssistantMessage();
+                box.textContent = m.content || '';
+                meta.textContent = new Date(m.createdAt).toLocaleString();
+              }
+            }
+          }
+          if (Array.isArray(data.decisions)) {
+            for (const d of data.decisions) {
+              if (d && d.decision) addDecision(d.decision);
+            }
+          }
+        } catch {}
+      }
 
       function ensureThreadId() {
         let tid = $threadId.value.trim();
@@ -228,6 +270,9 @@
 
       $send.addEventListener('click', sendMessage);
       $input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+      // Inicializa histórico se veio de "Ir para Chat"
+      loadHistoryIfAny();
 
       // Logout + Change password
       document.getElementById('btnLogout').onclick = async () => {

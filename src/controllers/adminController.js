@@ -8,7 +8,7 @@ function parseDate(s, def) {
 
 export async function listThreads(req, res) {
   try {
-    const { search = '', from = '', to = '', page = '1', limit = '20' } = req.query || {};
+    const { search = '', from = '', to = '', page = '1', limit = '20', sort = 'lastAt', dir = 'desc' } = req.query || {};
     const pg = Math.max(parseInt(page, 10) || 1, 1);
     const lim = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 200);
 
@@ -24,11 +24,21 @@ export async function listThreads(req, res) {
       match.$text = { $search: String(search).trim() };
     }
 
+    // Build sorting for grouped fields
+    const sortMap = {
+      threadId: '_id',
+      firstAt: 'firstAt',
+      lastAt: 'lastAt',
+      messageCount: 'count',
+    };
+    const sortField = sortMap[String(sort)] || 'lastAt';
+    const sortDir = String(dir).toLowerCase() === 'asc' ? 1 : -1;
+
     const pipeline = [
       { $match: match },
-      { $sort: { createdAt: -1 } },
-      { $group: { _id: '$threadId', firstAt: { $last: '$createdAt' }, lastAt: { $first: '$createdAt' }, count: { $sum: 1 } } },
-      { $sort: { lastAt: -1 } },
+      // Compute first/last using min/max so order of input doesn't matter
+      { $group: { _id: '$threadId', firstAt: { $min: '$createdAt' }, lastAt: { $max: '$createdAt' }, count: { $sum: 1 } } },
+      { $sort: { [sortField]: sortDir, lastAt: -1 } },
       { $skip: (pg - 1) * lim },
       { $limit: lim }
     ];
@@ -45,7 +55,11 @@ export async function getThreadMessages(req, res) {
     if (!threadId) return res.status(400).json({ error: 'threadId_required' });
     const msgs = await Message.find({ threadId }).sort({ createdAt: 1 }).lean();
     const decisions = await Decision.find({ threadId }).sort({ createdAt: 1 }).lean();
-    res.json({ threadId, messages: msgs, decisions });
+    const timeline = [
+      ...msgs.map(m => ({ type: 'message', createdAt: m.createdAt, role: m.role, content: m.content })),
+      ...decisions.map(d => ({ type: 'decision', createdAt: d.createdAt, decision: d.decision }))
+    ].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    res.json({ threadId, messages: msgs, decisions, timeline });
   } catch (e) {
     res.status(500).json({ error: 'get_thread_failed', detail: String(e) });
   }
@@ -140,4 +154,3 @@ export async function stats(req, res) {
     res.status(500).json({ error: 'stats_failed', detail: String(e) });
   }
 }
-

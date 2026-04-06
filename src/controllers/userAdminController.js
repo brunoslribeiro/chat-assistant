@@ -1,9 +1,13 @@
 import { User } from '../models/User.js';
 import { hashPassword } from '../utils/password.js';
 
-export async function listUsers(_req, res) {
+export async function listUsers(req, res) {
   try {
-    const users = await User.find({}, { email: 1, name: 1, role: 1, createdAt: 1 }).sort({ createdAt: -1 }).lean();
+    const { sort = 'createdAt', dir = 'desc' } = req.query || {};
+    const allowed = new Set(['email', 'name', 'role', 'createdAt']);
+    const field = allowed.has(String(sort)) ? String(sort) : 'createdAt';
+    const direction = String(dir).toLowerCase() === 'asc' ? 1 : -1;
+    const users = await User.find({}, { email: 1, name: 1, role: 1, createdAt: 1 }).sort({ [field]: direction }).lean();
     res.json({ users });
   } catch (e) {
     res.status(500).json({ error: 'list_users_failed', detail: String(e) });
@@ -39,4 +43,3 @@ export async function resetUserPassword(req, res) {
     res.status(500).json({ error: 'reset_password_failed', detail: String(e) });
   }
 }
-

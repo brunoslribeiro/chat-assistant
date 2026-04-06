@@ -9,22 +9,22 @@
       header{padding:12px;border-bottom:1px solid #1e293b;display:flex;gap:8px;align-items:center}
       main{padding:12px;display:grid;grid-template-columns:2fr 1fr;gap:12px}
       .box{border:1px solid #1e293b;border-radius:8px;padding:10px;background:#0b1220}
-      .msg{margin:6px 0;padding:8px;border-radius:8px}
-      .user{background:#14243b}
-      .assistant{background:#132235}
+      .msg{margin:6px 0;padding:10px 12px;border-radius:10px;border:1px solid #1e293b}
+      .msg.user{background:#14243b;border-color:#1e3a8a}
+      .msg.assistant{background:#132235;border-color:#14532d}
       pre{white-space:pre-wrap}
     </style>
   </head>
   <body>
     <header>
       <button onclick="location.href='/admin/'">Voltar</button>
-      <button onclick="location.href='/chat'" style="margin-left:8px">Ir para Chat</button>
+      <button id="goChat" style="margin-left:8px">Ir para Chat</button>
       <span id="title" style="margin-left:8px;color:#94a3b8"></span>
       <button style="margin-left:auto" onclick="exportDecisions()">Exportar decisões</button>
     </header>
     <main>
       <div class="box">
-        <h3>Mensagens</h3>
+        <h3>Linha do tempo</h3>
         <div id="msgs"></div>
       </div>
       <div class="box">
@@ -35,16 +35,48 @@
     <script>
       const qs = new URLSearchParams(location.search);
       const threadId = qs.get('threadId');
-      document.getElementById('title').textContent = threadId;
+      document.getElementById('title').textContent = threadId || '';
+      document.getElementById('goChat').onclick = () => {
+        const back = encodeURIComponent(location.href);
+        if (threadId) {
+          location.href = `/chat?threadId=${encodeURIComponent(threadId)}&from=${back}`;
+        } else {
+          location.href = `/chat?from=${back}`;
+        }
+      };
       async function load(){
         const r = await fetch(`/admin/threads/${encodeURIComponent(threadId)}/messages`);
         if (!r.ok) { alert('Falha'); return; }
         const data = await r.json();
         const msgs = document.getElementById('msgs'); msgs.innerHTML='';
-        for (const m of data.messages){
+        const onlyMsgs = (data.messages || []).slice().sort((a,b)=> new Date(a.createdAt)-new Date(b.createdAt));
+        for (const m of onlyMsgs){
           const div = document.createElement('div');
-          div.className = `msg ${m.role}`;
-          div.innerHTML = `<div style='font-size:12px;color:#94a3b8'>${new Date(m.createdAt).toLocaleString()} • ${m.role}</div><pre>${(m.content||'')}</pre>`;
+          const role = m.role || 'assistant';
+          let text = m.content || '';
+          // Se o conteúdo vier como JSON com display_text, usar o display_text
+          try {
+            if (text && text.trim().startsWith('{') && text.trim().endsWith('}')) {
+              const obj = JSON.parse(text);
+              if (obj && typeof obj.display_text === 'string' && obj.display_text.trim()) {
+                text = obj.display_text.trim();
+              }
+            }
+          } catch {}
+          if (role === 'assistant' && (!text || !text.trim())) {
+            try {
+              const created = new Date(m.createdAt).getTime();
+              let fallback = '';
+              for (const d of (data.decisions||[])){
+                const dt = new Date(d.createdAt).getTime();
+                if (dt <= created && d?.decision?.display_text) fallback = d.decision.display_text;
+              }
+              if (!fallback && Array.isArray(data.decisions) && data.decisions[0]?.decision?.display_text) fallback = data.decisions[0].decision.display_text;
+              if (fallback) text = fallback;
+            } catch {}
+          }
+          div.className = `msg ${role}`;
+          div.innerHTML = `<div style='font-size:12px;color:#94a3b8'>${new Date(m.createdAt).toLocaleString()} · ${role}</div><pre>${(text||'')}</pre>`;
           msgs.appendChild(div);
         }
         const decs = document.getElementById('decs'); decs.innerHTML='';
@@ -60,6 +92,8 @@
         location.href = `/admin/export/decisions?threadId=${encodeURIComponent(threadId)}`;
       }
       load();
+      // Atualização periódica para refletir novas mensagens/decisões
+      setInterval(() => { load(); }, 5000);
     </script>
   </body>
   </html>
